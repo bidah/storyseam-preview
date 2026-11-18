@@ -1,0 +1,21 @@
+{
+  "name": "storyseam-preview",
+  "version": "0.1.0",
+  "description": "Open a Storyseam story folder as a desktop: folders as windows, a sidebar explorer, an editable markdown viewer, and a visual config viewer with a raw JSON toggle.",
+  "type": "module",
+  "license": "MIT",
+  "bin": { "storyseam-preview": "bin/storyseam-preview.js" },
+  "engines": { "node": ">=20.19" },
+  "files": ["bin/", "server/", "src/", "index.html", "vite.config.js", "README.md"],
+  "scripts": {
+    "dev": "node bin/storyseam-preview.js",
+    "build": "vite build"
+  },
+  "dependencies": {
+    "marked": "^18.2.1",
+    "vite": "^8.3.8"
+  },
+  "repository": { "type": "git", "url": "git+https://github.com/bidah/storyseam-preview.git" },
+  "homepage": "https://storyseam.app/spec#preview",
+  "keywords": ["storyseam", "storyseam.md", "preview", "vite", "film", "agents"]
+}
