@@ -8,8 +8,13 @@ const taskbar = () => document.getElementById("taskbar");
 let z = 10;
 let cascade = 0;
 const windows = new Map();
+let focusListener = null;
+/** Called with the focused window (or null when none is left): the router keeps the URL on it. */
+export const setFocusListener = (fn) => (focusListener = fn);
+export const isOpen = (win) => Boolean(win && windows.has(win.id));
+export const getWindow = (id) => windows.get(id) || null;
 
-export function openWindow({ id, title, iconName = "file", body, width = 760, height = 520 }) {
+export function openWindow({ id, title, iconName = "file", body, width = 760, height = 520, route = "" }) {
   if (id && windows.has(id)) {
     const w = windows.get(id);
     w.el.hidden = false;
@@ -34,6 +39,7 @@ export function openWindow({ id, title, iconName = "file", body, width = 760, he
       <span class="win__icon">${icon(iconName, 14)}</span>
       <span class="win__title"></span>
       <span class="win__btns">
+        <button type="button" data-act="link" aria-label="Copy a link to this" title="Copy a link to this">${icon("link", 14)}</button>
         <button type="button" data-act="min" aria-label="Minimise">${icon("min", 14)}</button>
         <button type="button" data-act="max" aria-label="Maximise">${icon("max", 12)}</button>
         <button type="button" data-act="close" aria-label="Close">${icon("close", 14)}</button>
@@ -51,7 +57,7 @@ export function openWindow({ id, title, iconName = "file", body, width = 760, he
   tb.querySelector("span").textContent = title;
   taskbar().append(tb);
 
-  const win = { id: id || `w${z}`, el, tb, onClose: null };
+  const win = { id: id || `w${z}`, el, tb, onClose: null, route };
   windows.set(win.id, win);
 
   el.addEventListener("pointerdown", () => focus(win));
@@ -59,12 +65,13 @@ export function openWindow({ id, title, iconName = "file", body, width = 760, he
     if (el.hidden || !el.classList.contains("is-focused")) {
       el.hidden = false;
       focus(win);
-    } else el.hidden = true;
+    } else minimise(win);
   });
   el.querySelector(".win__btns").addEventListener("click", (e) => {
     const act = e.target.closest("button")?.dataset.act;
     if (act === "close") close(win);
-    if (act === "min") el.hidden = true;
+    if (act === "min") minimise(win);
+    if (act === "link") copyLink(win, e.target.closest("button"));
     if (act === "max") el.classList.toggle("is-max");
   });
   el.querySelector(".win__bar").addEventListener("dblclick", (e) => {
@@ -86,6 +93,39 @@ export function close(win) {
   win.el.remove();
   win.tb.remove();
   windows.delete(win.id);
+  focusTop();
+}
+
+function minimise(win) {
+  win.el.hidden = true;
+  win.el.classList.remove("is-focused");
+  win.tb.classList.remove("is-focused");
+  focusTop();
+}
+
+/** Hand focus to the top-most visible window, or tell the router none is left. */
+function focusTop() {
+  const top = [...windows.values()].filter((w) => !w.el.hidden).sort((a, b) => Number(b.el.style.zIndex) - Number(a.el.style.zIndex))[0];
+  if (top) focus(top);
+  else focusListener?.(null);
+}
+
+/** Re-announce a window's route after it changed (an explorer moved to another folder). */
+export function routeChanged(win) {
+  if (win.el.classList.contains("is-focused")) focusListener?.(win);
+}
+
+async function copyLink(win, button) {
+  const url = location.origin + "/" + String(win.route || "").split("/").filter(Boolean).map(encodeURIComponent).join("/");
+  try {
+    await navigator.clipboard.writeText(url);
+    button.classList.add("is-done");
+    setTimeout(() => button.classList.remove("is-done"), 1200);
+  } catch {
+    // Clipboard blocked (an insecure origin): the link is in the tooltip and the address bar.
+    button.title = url;
+    history.replaceState(null, "", url);
+  }
 }
 
 function focus(win) {
@@ -96,6 +136,7 @@ function focus(win) {
   win.el.style.zIndex = String(++z);
   win.el.classList.add("is-focused");
   win.tb.classList.add("is-focused");
+  focusListener?.(win);
 }
 
 function drag(el, handle) {

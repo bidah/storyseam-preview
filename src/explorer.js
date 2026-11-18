@@ -3,16 +3,8 @@
 // Double-click a folder to go in; double-click a file to open it in its own window.
 import { icon, iconFor } from "./icons.js";
 import { h, raw, viewerFor } from "./viewers.js";
-import { openWindow, setTitle } from "./wm.js";
-
-const find = (node, p) => {
-  if (node.path === p) return node;
-  for (const c of node.children || []) {
-    const f = find(c, p);
-    if (f) return f;
-  }
-  return null;
-};
+import { getWindow, openWindow, routeChanged, setTitle } from "./wm.js";
+import { find } from "./router.js";
 const parentOf = (p) => (p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "");
 
 export function openExplorer(story, startPath = "") {
@@ -33,7 +25,7 @@ export function openExplorer(story, startPath = "") {
     h("div", { class: "addr" }, back, up, crumbs),
     h("div", { class: "explorer__main" }, side, grid, pane),
   );
-  const win = openWindow({ title: root.name, iconName: "explorer", body, width: 1080, height: 640 });
+  const win = openWindow({ title: root.name, iconName: "explorer", body, width: 1080, height: 640, route: startPath });
 
   const go = (p, push = true) => {
     const node = find(root, p);
@@ -42,6 +34,15 @@ export function openExplorer(story, startPath = "") {
     cwd = p;
     selected = null;
     draw();
+    win.route = cwd;
+    routeChanged(win);
+  };
+  // The router steers an open explorer: to a folder, optionally with a file selected.
+  win.goTo = (p, selectPath) => {
+    if (p !== cwd) go(p);
+    win.route = cwd;
+    const node = selectPath ? find(root, selectPath) : null;
+    if (node) select(node);
   };
   back.addEventListener("click", () => history.length && go(history.pop(), false));
   up.addEventListener("click", () => cwd && go(parentOf(cwd)));
@@ -128,6 +129,7 @@ export function openExplorer(story, startPath = "") {
   return win;
 }
 
+
 function thumb(node) {
   const kind = iconFor(node);
   if (kind === "image") return h("span", { class: "tile__thumb" }, h("img", { src: raw(node.path), alt: "", loading: "lazy" }));
@@ -135,8 +137,11 @@ function thumb(node) {
 }
 
 export async function openFile(node) {
+  // Already open (a link or Back landed on it): bring it forward, keep its edits.
+  const existing = getWindow(`file:${node.path}`);
+  if (existing) return openWindow({ id: existing.id });
   const body = await viewerFor(node);
-  const win = openWindow({ id: `file:${node.path}`, title: node.path, iconName: iconFor(node), body, width: 820, height: 600 });
+  const win = openWindow({ id: `file:${node.path}`, title: node.path, iconName: iconFor(node), body, width: 820, height: 600, route: node.path });
   win.onClose = () => !(body.isDirty?.() && !confirmDiscard());
   return win;
 }

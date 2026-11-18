@@ -2,8 +2,10 @@
 // grid (drawn on a canvas), an explorer window open on the root, and a taskbar.
 import "./style.css";
 import { icon, iconFor } from "./icons.js";
-import { h } from "./viewers.js";
+import { h, setReadOnly } from "./viewers.js";
 import { openExplorer, openFile } from "./explorer.js";
+import { isOpen } from "./wm.js";
+import { startRouter, urlFor } from "./router.js";
 
 function drawGrid() {
   const c = document.getElementById("grid");
@@ -41,6 +43,7 @@ async function boot() {
     return;
   }
   document.title = `${story.tree.name} · Storyseam Preview`;
+  setReadOnly(story.readOnly);
 
   const icons = h("div", { class: "desk-icons", role: "list" });
   const first = ["storyseam.md", "STORY.md", "config.json"];
@@ -60,6 +63,7 @@ async function boot() {
           title: node.path,
           ondblclick: () => (node.type === "dir" ? openExplorer(story, node.path) : openFile(node)),
           onkeydown: (e) => e.key === "Enter" && (node.type === "dir" ? openExplorer(story, node.path) : openFile(node)),
+          onauxclick: (e) => e.button === 1 && window.open(urlFor(node.path), "_blank"),
         },
         h("span", { class: `desk-icon__img tile__icon--${iconFor(node)}`, html: icon(iconFor(node), 34) }),
         h("span", { class: "desk-icon__name" }, node.name),
@@ -68,12 +72,36 @@ async function boot() {
   }
   desk.append(icons);
 
-  const start = h("button", { type: "button", class: "task task--start", onclick: () => openExplorer(story), html: `${icon("explorer", 14)}<span>${story.tree.name}</span>` });
+  // One main explorer the router steers; a folder link moves it rather than stacking windows.
+  let main = null;
+  const folder = (p, selectPath) => {
+    if (isOpen(main)) {
+      main.el.hidden = false;
+      main.goTo(p, selectPath);
+      main.el.dispatchEvent(new PointerEvent("pointerdown"));
+    } else {
+      main = openExplorer(story, p);
+      if (selectPath) main.goTo(p, selectPath);
+    }
+    return main;
+  };
+  const notFound = (p) => {
+    const note = h("p", { class: "toast", role: "status" }, `Nothing at /${p} in this story.`);
+    document.body.append(note);
+    setTimeout(() => note.remove(), 3500);
+    history.replaceState(null, "", urlFor(""));
+    folder("");
+  };
+
+  const start = h("button", { type: "button", class: "task task--start", onclick: () => folder(""), html: `${icon("explorer", 14)}<span>${story.tree.name}</span>` });
   document.getElementById("taskbar").prepend(start);
 
-  openExplorer(story);
-  const spec = story.tree.children.find((c) => c.name === "storyseam.md");
-  if (spec) openFile(spec);
+  const routed = await startRouter(story, { folder, file: openFile, notFound });
+  if (!routed) {
+    folder("");
+    const spec = story.tree.children.find((c) => c.name === "storyseam.md");
+    if (spec) await openFile(spec);
+  }
 }
 
 boot();

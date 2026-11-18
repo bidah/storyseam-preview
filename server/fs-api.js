@@ -6,7 +6,8 @@
 //   GET /__story/file?path=...   a text file's contents
 //   GET /__story/files/<path>    any file's bytes (images, video, audio, html). A path, not a
 //                                query, so an HTML page's relative links resolve beside it.
-//   PUT /__story/file?path=...   save a text file (.md, .json, .txt only; JSON must parse)
+//   PUT /__story/file?path=...   save a text file (.md, .json, .txt only; JSON must parse).
+//                                Refused outright when the preview is shared (--share, read-only).
 //
 // Every path is resolved inside the story root; anything that escapes it is a 403.
 import fs from "node:fs";
@@ -47,16 +48,37 @@ const send = (res, code, body, type = "application/json") => {
   res.end(typeof body === "string" || Buffer.isBuffer(body) ? body : JSON.stringify(body));
 };
 
-export function storyFs(root) {
+export function storyFs(root, { readOnly = false } = {}) {
   root = path.resolve(root);
   return {
     name: "storyseam-story-fs",
     configureServer(server) {
+      // Deep links: a page load of any story path (/world, /shotlist/previews/block_02.html,
+      // /config.json) gets the app, which opens what the path names (src/router.js).
+      // Registered before Vite's own middleware, so a dotted name is not taken for a
+      // module or a missing static file. Vite's own paths, and requests that are not a
+      // browser asking for a page, pass through.
+      const appHtml = path.join(server.config.root, "index.html");
+      server.middlewares.use(async (req, res, next) => {
+        if (req.method !== "GET" || !(req.headers.accept || "").includes("text/html")) return next();
+        const url = new URL(req.url, "http://local");
+        if (url.pathname === "/" || /^\/(@|__story\/|src\/|node_modules\/|favicon)/.test(url.pathname)) return next();
+        if (req.headers["sec-fetch-dest"] && req.headers["sec-fetch-dest"] !== "document") return next();
+        try {
+          const html = await server.transformIndexHtml(url.pathname, fs.readFileSync(appHtml, "utf8"));
+          res.statusCode = 200;
+          res.setHeader("content-type", "text/html; charset=utf-8");
+          res.end(html);
+        } catch (e) {
+          next(e);
+        }
+      });
+
       server.middlewares.use("/__story", (req, res) => {
         const url = new URL(req.url, "http://local");
         const route = url.pathname;
         try {
-          if (route === "/tree" && req.method === "GET") return send(res, 200, { root, tree: tree(root) });
+          if (route === "/tree" && req.method === "GET") return send(res, 200, { root: path.basename(root), readOnly, tree: tree(root) });
 
           if (route.startsWith("/files/") && req.method === "GET") {
             const abs = inside(root, decodeURIComponent(route.slice("/files/".length)));
@@ -77,6 +99,7 @@ export function storyFs(root) {
             return send(res, 200, fs.readFileSync(abs, "utf8"), "text/plain; charset=utf-8");
           }
 
+          if (route === "/file" && req.method === "PUT" && readOnly) return send(res, 403, { error: "this preview is shared read-only" });
           if (route === "/file" && req.method === "PUT") {
             // Only this page may write: a site open in another tab cannot PUT here.
             const origin = req.headers.origin;

@@ -10,6 +10,10 @@
 import { marked } from "marked";
 import { icon, iconFor } from "./icons.js";
 
+// Set from /__story/tree: a shared preview shows everything and saves nothing.
+let readOnly = false;
+export const setReadOnly = (v) => (readOnly = Boolean(v));
+
 export const raw = (p) => `/__story/files/${p.split("/").map(encodeURIComponent).join("/")}`;
 const getText = async (p) => {
   const r = await fetch(`/__story/file?path=${encodeURIComponent(p)}`);
@@ -123,7 +127,7 @@ function markdownView(path, text) {
   };
   area.addEventListener("input", dirty);
   bindSave(root, save);
-  root.append(toolbar(editBtn, saveBtn, st), out, area);
+  root.append(readOnly ? toolbar(h("span", { class: "muted" }, "Read-only")) : toolbar(editBtn, saveBtn, st), out, area);
   setMode("view");
   root.isDirty = () => area.value !== saved;
   return root;
@@ -208,7 +212,8 @@ function jsonView(path, text) {
   };
   area.addEventListener("input", dirty);
   bindSave(root, save);
-  root.append(toolbar(h("div", { class: "segs", role: "group", "aria-label": "View as" }, tabV, tabJ), saveBtn, st), out, area);
+  if (readOnly) area.readOnly = true;
+  root.append(toolbar(h("div", { class: "segs", role: "group", "aria-label": "View as" }, tabV, tabJ), readOnly ? null : saveBtn, st), out, area);
   setMode(mode);
   root.isDirty = () => area.value !== saved;
   return root;
