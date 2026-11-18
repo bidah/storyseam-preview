@@ -2,8 +2,8 @@
 // open folder as an icon grid, and a preview pane for the selected file.
 // Double-click a folder to go in; double-click a file to open it in its own window.
 import { icon, iconFor } from "./icons.js";
-import { h, raw, viewerFor } from "./viewers.js";
-import { getWindow, openWindow, routeChanged, setTitle } from "./wm.js";
+import { galleryView, h, raw, viewerFor } from "./viewers.js";
+import { allWindows, getWindow, openWindow, routeChanged, setTitle } from "./wm.js";
 import { find } from "./router.js";
 const parentOf = (p) => (p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "");
 
@@ -132,11 +132,62 @@ export function openExplorer(story, startPath = "") {
 
 function thumb(node) {
   const kind = iconFor(node);
-  if (kind === "image") return h("span", { class: "tile__thumb" }, h("img", { src: raw(node.path), alt: "", loading: "lazy" }));
+  if (kind === "image") return h("span", { class: "tile__thumb" }, h("img", { src: raw(node.path, 240), alt: "", loading: "lazy" }));
   return h("span", { class: `tile__icon tile__icon--${kind}`, html: icon(kind, 34) });
 }
 
+/**
+ * The image viewer in its own window: `items` ({ path, name, label? }) in order,
+ * opened at `index`. One window per source (a page's images, a folder's images);
+ * opening the same source again moves it to the asked image.
+ */
+export function openGallery(items, index, source) {
+  const id = `gallery:${source}`;
+  const existing = getWindow(id);
+  if (existing) {
+    existing.galleryGo?.(index);
+    return openWindow({ id });
+  }
+  let win = null;
+  const body = galleryView(items, index, (it) => {
+    if (!win) return;
+    setTitle(win, it.name);
+    win.route = it.path;
+    routeChanged(win);
+  });
+  win = openWindow({ id, title: items[index]?.name || "Images", iconName: "image", body, width: 960, height: 680, route: items[index]?.path || "" });
+  win.items = items;
+  win.galleryGo = (k) => {
+    const thumb = body.querySelectorAll(".gallery__thumb")[k];
+    if (thumb) thumb.click();
+    body.focus();
+  };
+  body.start();
+  return win;
+}
+
+/** An image file opens in the viewer with the other images of its folder beside it. */
+function openImage(node) {
+  // Back/Forward or a link to an image an open gallery already holds: step that gallery
+  // (the top-most one) instead of opening the image's folder beside it.
+  const holder = allWindows()
+    .filter((w) => w.items?.some((it) => it.path === node.path))
+    .sort((a, b) => Number(b.el.style.zIndex) - Number(a.el.style.zIndex))[0];
+  if (holder) {
+    holder.galleryGo(holder.items.findIndex((it) => it.path === node.path));
+    return openWindow({ id: holder.id });
+  }
+  const folder = node.path.includes("/") ? node.path.slice(0, node.path.lastIndexOf("/")) : "";
+  const siblings = (find(storyRoot, folder)?.children || []).filter((c) => iconFor(c) === "image");
+  const list = siblings.length ? siblings : [node];
+  return openGallery(list.map((c) => ({ path: c.path, name: c.name })), Math.max(0, list.findIndex((c) => c.path === node.path)), `folder:${folder}`);
+}
+
+let storyRoot = null;
+export const setStoryRoot = (tree) => (storyRoot = tree);
+
 export async function openFile(node) {
+  if (iconFor(node) === "image" && storyRoot) return openImage(node);
   // Already open (a link or Back landed on it): bring it forward, keep its edits.
   const existing = getWindow(`file:${node.path}`);
   if (existing) return openWindow({ id: existing.id });

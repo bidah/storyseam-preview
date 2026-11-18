@@ -14,7 +14,7 @@ import { icon, iconFor } from "./icons.js";
 let readOnly = false;
 export const setReadOnly = (v) => (readOnly = Boolean(v));
 
-export const raw = (p) => `/__story/files/${p.split("/").map(encodeURIComponent).join("/")}`;
+export const raw = (p, w) => `/__story/files/${p.split("/").map(encodeURIComponent).join("/")}${w ? `?w=${w}` : ""}`;
 const getText = async (p) => {
   const r = await fetch(`/__story/file?path=${encodeURIComponent(p)}`);
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).error || r.statusText);
@@ -219,9 +219,121 @@ function jsonView(path, text) {
   return root;
 }
 
+// ---------- image viewer ----------
+// Full image, with left/right (buttons and arrow keys) through a list of images.
+// `items` are { path, name } story paths; `onChange(item)` lets the window
+// follow along (its title and its URL).
+let imageOpener = null;
+/** main.js registers how an image list opens in its own window. */
+export const setImageOpener = (fn) => (imageOpener = fn);
+
+export function galleryView(items, start = 0, onChange = () => {}) {
+  let i = Math.max(0, Math.min(items.length - 1, start));
+  const img = h("img", { class: "gallery__img", alt: "" });
+  const name = h("span", { class: "gallery__name" });
+  const count = h("span", { class: "gallery__count" });
+  const prev = h("button", { type: "button", class: "gallery__nav gallery__nav--prev", "aria-label": "Previous image", html: icon("back", 22), onclick: () => go(i - 1) });
+  const next = h("button", { type: "button", class: "gallery__nav gallery__nav--next", "aria-label": "Next image", html: icon("chevron", 22), onclick: () => go(i + 1) });
+  const strip = h("div", { class: "gallery__strip", role: "listbox", "aria-label": "Images" });
+  const thumbs = items.map((it, k) => {
+    const t = h("button", { type: "button", class: "gallery__thumb", role: "option", "aria-label": it.name, onclick: () => go(k) }, h("img", { src: raw(it.path, 240), alt: "", loading: "lazy" }));
+    strip.append(t);
+    return t;
+  });
+  const root = h(
+    "div",
+    { class: "viewer gallery", tabindex: "-1" },
+    h("div", { class: "gallery__stage" }, prev, img, h("span", { class: "gallery__loading", role: "status" }, "Loading…"), next),
+    h("div", { class: "gallery__bar" }, name, count, h("a", { class: "btn btn--sm", href: "#", target: "_blank", rel: "noopener", html: "<span>Original</span>" })),
+    items.length > 1 ? strip : null,
+  );
+  const original = root.querySelector(".gallery__bar a");
+  function go(k) {
+    if (!items.length) return;
+    i = (k + items.length) % items.length; // wraps: right on the last goes to the first
+    const it = items[i];
+    root.classList.add("is-loading");
+    img.onload = img.onerror = () => root.classList.remove("is-loading");
+    img.src = raw(it.path, 1600);
+    img.alt = it.name;
+    // warm the neighbours so left/right is instant
+    for (const d of [1, -1]) new Image().src = raw(items[(i + d + items.length) % items.length].path, 1600);
+    name.textContent = it.label ? `${it.label} · ${it.name}` : it.name;
+    count.textContent = `${i + 1} / ${items.length}`;
+    original.href = raw(it.path);
+    prev.hidden = next.hidden = items.length < 2;
+    thumbs.forEach((t, k2) => t.classList.toggle("is-on", k2 === i));
+    thumbs[i]?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    onChange(it, i);
+  }
+  root.addEventListener("keydown", (e) => {
+    if (e.key === "ArrowLeft") (e.preventDefault(), go(i - 1));
+    if (e.key === "ArrowRight") (e.preventDefault(), go(i + 1));
+  });
+  root.start = () => (go(i), root.focus());
+  return root;
+}
+
+/** A story path from an <img> src inside a previewed page, or null if it is not the story's. */
+function storyPathOf(src) {
+  try {
+    const u = new URL(src, location.href);
+    if (u.origin !== location.origin || !u.pathname.startsWith("/__story/files/")) return null;
+    return decodeURIComponent(u.pathname.slice("/__story/files/".length));
+  } catch {
+    return null;
+  }
+}
+
+/** "@Image2 · location · Andes" from a shot preview's <figcaption><b>@Image2</b>location · Andes<br><code>…</code>. */
+function captionOf(img) {
+  const cap = img.closest("figure")?.querySelector("figcaption");
+  if (!cap) return img.alt || "";
+  const c = cap.cloneNode(true);
+  const tag = c.querySelector("b")?.textContent?.trim();
+  c.querySelectorAll("b, code").forEach((x) => x.remove());
+  const rest = c.textContent.replace(/\s+/g, " ").trim();
+  return [tag, rest].filter(Boolean).join(" · ");
+}
+
 // ---------- html previewer ----------
 function htmlView(node) {
   const frame = h("iframe", { class: "frame", src: raw(node.path), title: node.name, sandbox: "allow-same-origin allow-popups" });
+  // Double-click an image in the page: open every image on the page in the image viewer,
+  // at that one. The page itself runs no script (sandboxed); the listener is ours.
+  // Hook the page as soon as its HTML is parsed: `load` waits for every image, which
+  // over a tunnel can be many seconds of nothing working.
+  const hook = () => {
+    const doc = frame.contentDocument;
+    if (!doc || doc.location.href === "about:blank" || doc.readyState === "loading" || doc.__storyseamHooked) return;
+    doc.__storyseamHooked = true;
+    doc.addEventListener("dblclick", (e) => {
+      const target = e.target.closest?.("img");
+      if (!target || !imageOpener) return;
+      const imgs = [...doc.querySelectorAll("img")]
+        .map((im) => ({ el: im, path: storyPathOf(im.currentSrc || im.src) }))
+        .filter((x) => x.path);
+      const items = imgs.map(({ el, path }) => ({
+        path,
+        name: path.split("/").pop(),
+        label: captionOf(el),
+      }));
+      const at = imgs.findIndex((x) => x.el === target);
+      if (at >= 0) imageOpener(items, at, `${node.path}`);
+    });
+    // a pointer hint that images open
+    const style = doc.createElement("style");
+    style.textContent = "img{cursor:zoom-in}";
+    doc.head?.append(style);
+  };
+  frame.addEventListener("load", hook);
+  // Keeps hooking (a Reload is a new document); stops once the window is gone.
+  let seen = false;
+  const poll = setInterval(() => {
+    if (frame.isConnected) seen = true;
+    else if (seen) return clearInterval(poll);
+    hook();
+  }, 150);
   const reload = btn("Reload", "eye", () => (frame.src = `${raw(node.path)}?t=${Date.now()}`));
   const pop = h("a", { class: "btn", href: raw(node.path), target: "_blank", rel: "noopener", html: `${icon("explorer", 14)}<span>Open in a tab</span>` });
   return h("div", { class: "viewer" }, toolbar(reload, pop), frame);
@@ -230,7 +342,7 @@ function htmlView(node) {
 // ---------- entry ----------
 export async function viewerFor(node) {
   const kind = iconFor(node);
-  if (kind === "image") return h("div", { class: "viewer viewer--media" }, h("img", { src: raw(node.path), alt: node.name }));
+  if (kind === "image") return h("div", { class: "viewer viewer--media" }, h("img", { src: raw(node.path, 1200), alt: node.name }));
   if (kind === "video") return h("div", { class: "viewer viewer--media" }, h("video", { src: raw(node.path), controls: true }));
   if (kind === "audio") return h("div", { class: "viewer viewer--media" }, h("audio", { src: raw(node.path), controls: true }));
   if (kind === "html") return htmlView(node);

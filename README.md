@@ -13,6 +13,11 @@ Open a [Storyseam](https://storyseam.app/spec) story folder as a desktop.
   only saves when it parses.
 - **HTML previewer.** Shot previews (`shotlist/previews/<block>.html`) and the presets page
   open in a sandboxed frame, with their images and video resolved from the story.
+- **Image viewer.** Double-click any image in a shot preview, or open an image file. It opens
+  full size in its own window, with left/right arrows (and the arrow keys) through every image
+  on that page or in that folder, a thumbnail strip, and the original one click away. Images
+  are sent as resized WebP (`?w=1600`, about 200 KB instead of a 4 MB PNG) and cached, so they
+  are quick over a tunnel.
 - **Media.** Character sheets, plates, voice references and rendered clips.
 - **Every folder and file has a URL.** `/world` opens that folder, and
   `/shotlist/previews/block_02.html` opens that file in its own window with its folder

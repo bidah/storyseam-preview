@@ -13,6 +13,7 @@ let focusListener = null;
 export const setFocusListener = (fn) => (focusListener = fn);
 export const isOpen = (win) => Boolean(win && windows.has(win.id));
 export const getWindow = (id) => windows.get(id) || null;
+export const allWindows = () => [...windows.values()];
 
 export function openWindow({ id, title, iconName = "file", body, width = 760, height = 520, route = "" }) {
   if (id && windows.has(id)) {

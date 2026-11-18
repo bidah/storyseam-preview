@@ -4,6 +4,9 @@
 //
 //   GET /__story/tree            the whole folder as a tree (dotfiles shown, .git skipped)
 //   GET /__story/file?path=...   a text file's contents
+//   GET /__story/files/<path>?w=N  an image resized to at most N px wide, as WebP (cached), so a
+//                                4 MB sheet crosses a tunnel as ~200 KB. Without ?w, the original.
+//                                An .html page's <img src> get ?w=1600 added as it is served.
 //   GET /__story/files/<path>    any file's bytes (images, video, audio, html). A path, not a
 //                                query, so an HTML page's relative links resolve beside it.
 //   PUT /__story/file?path=...   save a text file (.md, .json, .txt only; JSON must parse).
@@ -11,7 +14,9 @@
 //
 // Every path is resolved inside the story root; anything that escapes it is a 403.
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import crypto from "node:crypto";
 
 const SKIP = new Set([".git", "node_modules", ".DS_Store"]);
 const EDITABLE = /\.(md|markdown|json|txt)$/i;
@@ -47,6 +52,29 @@ const send = (res, code, body, type = "application/json") => {
   res.setHeader("content-type", type);
   res.end(typeof body === "string" || Buffer.isBuffer(body) ? body : JSON.stringify(body));
 };
+
+const RESIZABLE = /\.(png|jpe?g|webp)$/i;
+const CACHE = path.join(os.tmpdir(), "storyseam-preview-cache");
+const WIDTHS = [240, 800, 1200, 1600, 2400];
+
+/** A resized WebP of an image, cached by path, size, mtime and width. */
+async function resized(abs, w) {
+  const st = fs.statSync(abs);
+  const width = WIDTHS.find((x) => x >= w) || WIDTHS[WIDTHS.length - 1];
+  const key = crypto.createHash("sha1").update(`${abs}|${st.size}|${st.mtimeMs}|${width}`).digest("hex");
+  const out = path.join(CACHE, `${key}.webp`);
+  if (fs.existsSync(out)) return out;
+  const { default: sharp } = await import("sharp");
+  fs.mkdirSync(CACHE, { recursive: true });
+  await sharp(abs).rotate().resize({ width, withoutEnlargement: true }).webp({ quality: 82 }).toFile(out + ".tmp");
+  fs.renameSync(out + ".tmp", out);
+  return out;
+}
+
+/** Add ?w=1600 to a page's relative image links, so a shot preview is light to load. */
+function lighten(html) {
+  return html.replace(/(<img\b[^>]*?\ssrc=")([^"?#:]+\.(?:png|jpe?g|webp))(")/gi, "$1$2?w=1600$3");
+}
 
 export function storyFs(root, { readOnly = false } = {}) {
   root = path.resolve(root);
@@ -85,8 +113,23 @@ export function storyFs(root, { readOnly = false } = {}) {
             if (!abs) return send(res, 403, { error: "outside the story folder" });
             if (!fs.existsSync(abs) || fs.statSync(abs).isDirectory()) return send(res, 404, { error: "not found" });
             const ext = path.extname(abs).slice(1).toLowerCase();
+            const w = Number(url.searchParams.get("w")) || 0;
+            if (w > 0 && RESIZABLE.test(abs)) {
+              return resized(abs, w).then(
+                (file) => {
+                  res.setHeader("content-type", "image/webp");
+                  res.setHeader("cache-control", "private, max-age=300");
+                  fs.createReadStream(file).pipe(res);
+                },
+                () => {
+                  res.setHeader("content-type", MIME[ext] || "application/octet-stream");
+                  fs.createReadStream(abs).pipe(res);
+                },
+              );
+            }
             res.setHeader("content-type", MIME[ext] || "application/octet-stream");
             res.setHeader("cache-control", "no-store");
+            if (ext === "html" || ext === "htm") return res.end(lighten(fs.readFileSync(abs, "utf8")));
             return fs.createReadStream(abs).pipe(res);
           }
 

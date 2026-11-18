@@ -2,8 +2,8 @@
 // grid (drawn on a canvas), an explorer window open on the root, and a taskbar.
 import "./style.css";
 import { icon, iconFor } from "./icons.js";
-import { h, setReadOnly } from "./viewers.js";
-import { openExplorer, openFile } from "./explorer.js";
+import { h, setImageOpener, setReadOnly } from "./viewers.js";
+import { openExplorer, openFile, openGallery, setStoryRoot } from "./explorer.js";
 import { isOpen } from "./wm.js";
 import { startRouter, urlFor } from "./router.js";
 
@@ -44,6 +44,8 @@ async function boot() {
   }
   document.title = `${story.tree.name} · Storyseam Preview`;
   setReadOnly(story.readOnly);
+  setStoryRoot(story.tree);
+  setImageOpener((items, index, source) => openGallery(items, index, `page:${source}`));
 
   const icons = h("div", { class: "desk-icons", role: "list" });
   const first = ["storyseam.md", "STORY.md", "config.json"];
